@@ -1,0 +1,19 @@
+[project]
+name = "zlm"
+version = "0.1.0"
+description = "Zack's lite memory surface"
+readme = "README.md"
+authors = [
+    { name = "ZackaryW", email = "36378555+ZackaryW@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.4.0",
+]
+
+[project.scripts]
+zlm = "zlm:main"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
