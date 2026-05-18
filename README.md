@@ -2,6 +2,11 @@
 
 zack's lite memory
 
+## Install
+```bash
+pip install git+https://github.com/ZackaryW/zlm.git
+```
+
 ## What it is
 
 `zlm` is a small SQLite-backed rolling memory tool for short-lived workspace state.
@@ -103,7 +108,29 @@ The reserved wrapper is useful when you want to pass a scalar through a structur
 
 ## Python use
 
-`SQLiteMemoryContext` provides the underlying API.
+For Python code that should feel like the CLI, use `Zlm`.
+
+```python
+from zlm import Zlm
+
+with Zlm() as zlm:
+	zlm.append("verdict", "retry")
+	zlm.append("decision", {"mode": "fallback", "reason": "timeout"})
+	entries = zlm.get()
+	next_session = zlm.swap()
+	adopted_root = zlm.adopt("../user-workspace")
+```
+
+`Zlm` mirrors the CLI workflow:
+
+- `append(type, body)`
+- `get(session_id=None)`
+- `swap()`
+- `adopt(path)`
+
+`adopt(path)` sets `zlm_cwd_override` in the current Python process and returns the resolved workspace root.
+
+`SQLiteMemoryContext` remains the lower-level storage API.
 
 ```python
 from zlm import SQLiteMemoryContext

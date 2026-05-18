@@ -6,8 +6,8 @@ from typing import Any
 import click
 import orjson
 
-from zlm.core import SQLiteMemoryContext
-from zlm.utils import CWD_OVERRIDE_ENV, ensure_session_id, resolve_session_id, resolve_workspace_root
+from zlm.helper import Zlm
+from zlm.utils import CWD_OVERRIDE_ENV, resolve_workspace_root
 
 
 _RESERVED_LITERAL_KEY = "$zlmk"
@@ -42,8 +42,11 @@ def _load_json(value: str) -> Any:
 		return _unwrap_reserved_literal({_RESERVED_LITERAL_KEY: value})
 
 
-def _with_context(db_path: str | None) -> SQLiteMemoryContext:
-	return SQLiteMemoryContext(Path(db_path) if db_path is not None else None)
+def _with_zlm(db_path: str | None, workspace_hash: str | None) -> Zlm:
+	return Zlm(
+		db_path=Path(db_path) if db_path is not None else None,
+		workspace_hash=workspace_hash,
+	)
 
 
 def _quote_powershell_string(value: str) -> str:
@@ -71,18 +74,9 @@ def cli(ctx: click.Context, db_path: str | None, workspace_hash: str | None) -> 
 @click.argument("body_json")
 @click.pass_context
 def append_entry(ctx: click.Context, entry_type: str, body_json: str) -> None:
-	entry = {"type": entry_type, "body": _load_json(body_json)}
 	try:
-		with _with_context(ctx.obj["db_path"]) as memory_context:
-			resolved_session_id = ensure_session_id(
-				memory_context,
-				workspace_hash=ctx.obj["workspace_hash"],
-			)
-			memory_context.append(
-				resolved_session_id,
-				entry,
-				workspace_hash=ctx.obj["workspace_hash"],
-			)
+		with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+			zlm.append(entry_type, _load_json(body_json))
 	except ValueError as exc:
 		raise click.ClickException(str(exc)) from exc
 
@@ -103,8 +97,8 @@ def adopt_workspace(path: Path) -> None:
 @cli.command("swap", help="Create and switch to a new current workspace session.")
 @click.pass_context
 def swap_session(ctx: click.Context) -> None:
-	with _with_context(ctx.obj["db_path"]) as memory_context:
-		session_id = memory_context.create_session(workspace_hash=ctx.obj["workspace_hash"])
+	with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+		session_id = zlm.swap()
 
 	click.echo(session_id)
 
@@ -114,16 +108,8 @@ def swap_session(ctx: click.Context) -> None:
 @click.pass_context
 def get_session_memory(ctx: click.Context, session_id: str | None) -> None:
 	try:
-		with _with_context(ctx.obj["db_path"]) as memory_context:
-			resolved_session_id = resolve_session_id(
-				memory_context,
-				session_id=session_id,
-				workspace_hash=ctx.obj["workspace_hash"],
-			)
-			entries = memory_context.get_session_memory(
-				resolved_session_id,
-				workspace_hash=ctx.obj["workspace_hash"],
-			)
+		with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+			entries = zlm.get(session_id=session_id)
 	except ValueError as exc:
 		raise click.ClickException(str(exc)) from exc
 

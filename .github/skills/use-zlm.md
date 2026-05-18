@@ -98,6 +98,22 @@ $env:zlm_cwd_override = 'D:\user-workspace'
 
 After that env var is set in the current shell, `append`, `get`, and `swap` resolve against the adopted workspace root.
 
+## Python helper surface
+
+When using `zlm` from Python rather than the CLI, prefer the `Zlm` helper for the same workflow shape:
+
+```python
+from zlm import Zlm
+
+with Zlm() as zlm:
+	zlm.append("verdict", "retry")
+	entries = zlm.get()
+	zlm.swap()
+	zlm.adopt("../user-workspace")
+```
+
+Use `SQLiteMemoryContext` directly only when you want low-level control over session ids and storage operations.
+
 ## Recommended usage patterns
 
 Write a handoff verdict:
