@@ -13,8 +13,14 @@ class Zlm:
         self,
         db_path: str | Path | None = None,
         workspace_hash: str | None = None,
+        max_sessions: int = 5,
+        max_entries: int = 15,
     ) -> None:
-        self._context = SQLiteMemoryContext(db_path=db_path)
+        self._context = SQLiteMemoryContext(
+            db_path=db_path,
+            max_sessions=max_sessions,
+            max_entries=max_entries,
+        )
         self._workspace_hash = workspace_hash
         self._adopted_path: Path | None = None
         self._session_id: str | None = None

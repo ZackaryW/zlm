@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from zlm import Zlm
 from zlm.utils import CWD_OVERRIDE_ENV
 
@@ -66,3 +68,30 @@ def test_helper_adopt_allows_inheriting_memory_from_other_workspace_path(
         adopted_zlm.adopt(source_dir)
 
         assert adopted_zlm.get() == [{"type": "verdict", "body": "retry"}]
+
+
+def test_helper_allows_configuring_retention_limits(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    with Zlm(db_path=tmp_path / "memory.db", max_sessions=2, max_entries=2) as zlm:
+        first_session = zlm.swap()
+        zlm.append("verdict", "first")
+
+        second_session = zlm.swap()
+        zlm.append("verdict", "second")
+        zlm.append("verdict", "second-overflow")
+        zlm.append("verdict", "second-latest")
+
+        third_session = zlm.swap()
+        zlm.append("verdict", "third")
+
+        with pytest.raises(ValueError, match="unknown session_id"):
+            zlm.get(first_session)
+
+        assert zlm.get(second_session) == [
+            {"type": "verdict", "body": "second-overflow"},
+            {"type": "verdict", "body": "second-latest"},
+        ]
+        assert zlm.get() == [{"type": "verdict", "body": "third"}]
+        assert zlm.context.list_sessions(zlm.workspace_hash) == [third_session, second_session]

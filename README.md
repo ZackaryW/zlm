@@ -13,10 +13,10 @@ pip install git+https://github.com/ZackaryW/zlm.git
 
 It is designed for lightweight values like verdicts, flags, scores, decisions, and tags. Memory is scoped to the current workspace, with workspace identity derived from git root when available.
 
-Retention is bounded:
+Retention is bounded by class-configurable defaults:
 
-- at most 5 sessions per workspace
-- at most 15 entries per session
+- at most 5 sessions per workspace by default
+- at most 15 entries per session by default
 - eviction happens inline on write
 
 ## CLI use
@@ -119,6 +119,9 @@ with Zlm() as zlm:
 	entries = zlm.get()
 	next_session = zlm.swap()
 	adopted_root = zlm.adopt("../user-workspace")
+
+with Zlm(max_sessions=10, max_entries=50) as zlm:
+	zlm.append("verdict", "keep more history")
 ```
 
 `Zlm` mirrors the CLI workflow:
@@ -127,6 +130,8 @@ with Zlm() as zlm:
 - `get(session_id=None)`
 - `swap()`
 - `adopt(path)`
+
+`Zlm` also accepts optional `max_sessions` and `max_entries` constructor arguments to override the default retention window.
 
 `adopt(path)` sets `zlm_cwd_override` in the current Python process and returns the resolved workspace root.
 
@@ -143,4 +148,4 @@ context.close()
 ```
 
 By default the SQLite file is stored at `{temp}/zlm-memory.db`.
-Pass `db_path` to override it, for example in tests or for workspace-local storage.
+Pass `db_path` to override it, for example in tests or for workspace-local storage. `SQLiteMemoryContext` also accepts `max_sessions` and `max_entries`.
