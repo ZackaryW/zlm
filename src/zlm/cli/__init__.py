@@ -7,10 +7,10 @@ import click
 import orjson
 
 from zlm.helper import Zlm
-from zlm.utils import CWD_OVERRIDE_ENV, resolve_workspace_root
 
 
 _RESERVED_LITERAL_KEY = "$zlmk"
+_SESSION_ENV_VAR = "ZLM_SESSION_ID"
 
 
 def _dump_json(value: Any) -> str:
@@ -44,13 +44,25 @@ def _load_json(value: str) -> Any:
 
 def _with_zlm(
 	db_path: str | None,
-	workspace_hash: str | None,
 	max_sessions: int,
 	max_entries: int,
 ) -> Zlm:
 	return Zlm(
 		db_path=Path(db_path) if db_path is not None else None,
-		workspace_hash=workspace_hash,
+		max_sessions=max_sessions,
+		max_entries=max_entries,
+	)
+
+
+def _create_zlm_for_session(
+	db_path: str | None,
+	session_id: str | None,
+	max_sessions: int,
+	max_entries: int,
+) -> Zlm:
+	return Zlm(
+		db_path=Path(db_path) if db_path is not None else None,
+		session_id=session_id,
 		max_sessions=max_sessions,
 		max_entries=max_entries,
 	)
@@ -60,16 +72,23 @@ def _quote_powershell_string(value: str) -> str:
 	return value.replace("'", "''")
 
 
+def _resolve_cli_session_id(session_id: str | None) -> str:
+	if session_id is None:
+		raise click.ClickException(f"session_id is required; pass SESSION_ID or set {_SESSION_ENV_VAR}")
+
+	return session_id
+
+
 @click.group()
 @click.option("--db-path", type=click.Path(path_type=str), default=None, help="Path to the SQLite database file.")
-@click.option("--workspace-hash", default=None, help="Override the derived workspace hash.")
+@click.option("--zlm-session-id", "env_session_id", envvar=_SESSION_ENV_VAR, default=None, help="Default session id when SESSION_ID is omitted.")
 @click.option(
 	"--max-sessions",
 	type=click.IntRange(min=1),
 	default=5,
 	show_default=True,
 	envvar="ZLM_MAX_SESSIONS",
-	help="Maximum retained sessions per workspace.",
+	help="Maximum retained sessions.",
 )
 @click.option(
 	"--max-entries",
@@ -83,13 +102,13 @@ def _quote_powershell_string(value: str) -> str:
 def cli(
 	ctx: click.Context,
 	db_path: str | None,
-	workspace_hash: str | None,
+	env_session_id: str | None,
 	max_sessions: int,
 	max_entries: int,
 ) -> None:
 	ctx.ensure_object(dict)
 	ctx.obj["db_path"] = db_path
-	ctx.obj["workspace_hash"] = workspace_hash
+	ctx.obj["env_session_id"] = env_session_id
 	ctx.obj["max_sessions"] = max_sessions
 	ctx.obj["max_entries"] = max_entries
 
@@ -97,18 +116,26 @@ def cli(
 @cli.command(
 	"append",
 	help=(
-		"Append an entry to the current workspace session. "
+		"Append an entry to a session. "
+		"Pass SESSION_ID explicitly or set ZLM_SESSION_ID. "
 		"Pass raw text for string bodies or use {\"$zlmk\": ...} to unwrap a scalar value explicitly."
 	),
 )
-@click.argument("entry_type")
-@click.argument("body_json")
+@click.argument("args", nargs=-1)
 @click.pass_context
-def append_entry(ctx: click.Context, entry_type: str, body_json: str) -> None:
+def append_entry(ctx: click.Context, args: tuple[str, ...]) -> None:
+	if len(args) == 3:
+		session_id, entry_type, body_json = args
+	elif len(args) == 2:
+		session_id = ctx.obj["env_session_id"]
+		entry_type, body_json = args
+	else:
+		raise click.UsageError("append expects SESSION_ID ENTRY_TYPE BODY_JSON or ENTRY_TYPE BODY_JSON when ZLM_SESSION_ID is set")
+
 	try:
-		with _with_zlm(
+		with _create_zlm_for_session(
 			ctx.obj["db_path"],
-			ctx.obj["workspace_hash"],
+			_resolve_cli_session_id(session_id),
 			ctx.obj["max_sessions"],
 			ctx.obj["max_entries"],
 		) as zlm:
@@ -117,45 +144,37 @@ def append_entry(ctx: click.Context, entry_type: str, body_json: str) -> None:
 		raise click.ClickException(str(exc)) from exc
 
 
-@cli.command(
-	"adopt",
-	help=(
-		"Emit a PowerShell command that sets the workspace override so the current shell adopts another path's session scope."
-	),
-)
-@click.argument("path", type=click.Path(path_type=Path))
-def adopt_workspace(path: Path) -> None:
-	workspace_root = resolve_workspace_root(path)
-	quoted_root = _quote_powershell_string(str(workspace_root))
-	click.echo(f"$env:{CWD_OVERRIDE_ENV} = '{quoted_root}'")
-
-
-@cli.command("swap", help="Create and switch to a new current workspace session.")
+@cli.command("create-session", help="Create a new session and print its session id.")
+@click.option("--export", "export_session", is_flag=True, help="Emit a PowerShell command that sets ZLM_SESSION_ID.")
 @click.pass_context
-def swap_session(ctx: click.Context) -> None:
+def create_session(ctx: click.Context, export_session: bool) -> None:
 	with _with_zlm(
 		ctx.obj["db_path"],
-		ctx.obj["workspace_hash"],
 		ctx.obj["max_sessions"],
 		ctx.obj["max_entries"],
 	) as zlm:
-		session_id = zlm.swap()
+		session_id = zlm.create_session()
+
+	if export_session:
+		quoted_session_id = _quote_powershell_string(session_id)
+		click.echo(f"$env:{_SESSION_ENV_VAR} = '{quoted_session_id}'")
+		return
 
 	click.echo(session_id)
 
 
-@cli.command("get", help="Get retained memory for the current workspace session.")
+@cli.command("get", help="Get retained memory for a session. Pass SESSION_ID explicitly or set ZLM_SESSION_ID.")
 @click.argument("session_id", required=False)
 @click.pass_context
 def get_session_memory(ctx: click.Context, session_id: str | None) -> None:
 	try:
-		with _with_zlm(
+		with _create_zlm_for_session(
 			ctx.obj["db_path"],
-			ctx.obj["workspace_hash"],
+			_resolve_cli_session_id(session_id or ctx.obj["env_session_id"]),
 			ctx.obj["max_sessions"],
 			ctx.obj["max_entries"],
 		) as zlm:
-			entries = zlm.get(session_id=session_id)
+			entries = zlm.get()
 	except ValueError as exc:
 		raise click.ClickException(str(exc)) from exc
 

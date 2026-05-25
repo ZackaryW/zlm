@@ -1,7 +1,7 @@
 [project]
 name = "zlm"
-version = "0.1.2"
-description = "Zack's lite memory surface"
+version = "0.2.0"
+description = "Zack's lobe memory session cache"
 readme = "README.md"
 authors = [
     { name = "ZackaryW", email = "36378555+ZackaryW@users.noreply.github.com" }

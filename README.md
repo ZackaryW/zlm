@@ -1,6 +1,8 @@
 # zlm
 
-zack's lite memory
+zack's lobe memory
+
+A tiny SQLite-backed session cache for short-lived state.
 
 ## Install
 ```bash
@@ -9,21 +11,35 @@ pip install git+https://github.com/ZackaryW/zlm.git
 
 ## What it is
 
-`zlm` is a small SQLite-backed rolling memory tool for short-lived workspace state.
+`zlm` is a small SQLite-backed append cache for short-lived session state.
 
-It is designed for lightweight values like verdicts, flags, scores, decisions, and tags. Memory is scoped to the current workspace, with workspace identity derived from git root when available.
+It is designed for lightweight values like verdicts, flags, scores, decisions, tags, and small structured handoff state.
+
+The identity contract is explicit: session ids are the only lookup key. There is no ambient workspace routing, cwd-derived scope, or implicit latest-session lookup in the CLI.
 
 Retention is bounded by class-configurable defaults:
 
-- at most 5 sessions per workspace by default
+- at most 5 sessions globally by default
 - at most 15 entries per session by default
 - eviction happens inline on write
+
+This makes `zlm` closer to a bounded session log/cache than a general-purpose memory system.
 
 ## CLI use
 
 The main workflow is:
 
 ```powershell
+$session = uv run zlm create-session
+uv run zlm append $session verdict 'hello'
+uv run zlm get $session
+```
+
+If you want the current shell to hold the active session id, `create-session` can emit a PowerShell assignment:
+
+```powershell
+uv run zlm create-session --export
+$env:ZLM_SESSION_ID = '...'
 uv run zlm append verdict 'hello'
 uv run zlm get
 ```
@@ -31,11 +47,14 @@ uv run zlm get
 Retention can also be overridden from the CLI when you need a larger or smaller window:
 
 ```powershell
-uv run zlm --max-sessions 10 --max-entries 50 append verdict 'hello'
-uv run zlm --max-sessions 10 --max-entries 50 get
+$session = uv run zlm --max-sessions 10 --max-entries 50 create-session
+uv run zlm --max-sessions 10 --max-entries 50 append $session verdict 'hello'
+uv run zlm --max-sessions 10 --max-entries 50 get $session
 ```
 
 You can also set `ZLM_MAX_SESSIONS` and `ZLM_MAX_ENTRIES` in the shell to avoid repeating the flags.
+
+You can also set `ZLM_SESSION_ID` in the shell to make `append` and `get` default to that session when `SESSION_ID` is omitted.
 
 Example output:
 
@@ -45,61 +64,50 @@ Example output:
 ]
 ```
 
-Appending again reuses the current workspace session until you explicitly start a new one:
+Appending again reuses the same session id when you pass it again:
 
 ```powershell
-uv run zlm append score '{"$zlmk": 0.91}'
-uv run zlm get
+uv run zlm append $session score '{"$zlmk": 0.91}'
+uv run zlm get $session
 ```
 
 ## Commands
 
-`append ENTRY_TYPE BODY_JSON`
+`create-session`
 
-- Appends an entry to the current workspace session.
-- If no session exists yet for the current workspace, one is created automatically.
+- Creates a new session and prints the session id.
+- This is the entry point for new state.
+- `create-session --export` emits a PowerShell command that sets `ZLM_SESSION_ID` in the current shell.
+
+`append SESSION_ID ENTRY_TYPE BODY_JSON`
+
+- Appends an entry to the given session.
 - `BODY_JSON` accepts normal JSON values.
 - Plain text is also accepted directly and stored as a string body.
+- If `ZLM_SESSION_ID` is set, you can omit `SESSION_ID` and call `append ENTRY_TYPE BODY_JSON`.
 
 Examples:
 
 ```powershell
-uv run zlm append verdict 'hello'
-uv run zlm append flag true
-uv run zlm append decision '{"mode":"fallback","reason":"timeout"}'
-uv run zlm append score '{"$zlmk": 0.91}'
+$session = uv run zlm create-session
+uv run zlm append $session verdict 'hello'
+uv run zlm append $session flag true
+uv run zlm append $session decision '{"mode":"fallback","reason":"timeout"}'
+uv run zlm append $session score '{"$zlmk": 0.91}'
 ```
 
-`get [SESSION_ID]`
+`get SESSION_ID`
 
-- Returns the retained entries for the current workspace session.
-- If `SESSION_ID` is omitted, `zlm` resolves the latest session for the current workspace.
+- Returns the retained entries for the given session.
+- If `ZLM_SESSION_ID` is set, you can omit `SESSION_ID` and call `get`.
+
+Without an explicit `SESSION_ID` or `ZLM_SESSION_ID`, the CLI raises an error.
 
 Global options:
 
 - `--db-path PATH`
-- `--workspace-hash HASH`
 - `--max-sessions N`
 - `--max-entries N`
-
-`swap`
-
-- Creates a new session for the current workspace.
-- Later `append` and `get` calls resolve to that new session because it becomes the latest workspace session.
-
-`adopt PATH`
-
-- Emits a PowerShell command that sets `zlm_cwd_override` to the resolved workspace root for `PATH`.
-- This is useful for agent worktrees that need to inherit the user's workspace memory scope.
-
-Example:
-
-```powershell
-uv run zlm adopt ..\user-workspace
-$env:zlm_cwd_override = 'D:\user-workspace'
-```
-
-After setting the override in the current shell, later `append`, `get`, and `swap` calls resolve against the adopted workspace instead of the shell's literal cwd.
 
 ## Input rules
 
@@ -130,26 +138,28 @@ For Python code that should feel like the CLI, use `Zlm`.
 from zlm import Zlm
 
 with Zlm() as zlm:
+	session_id = zlm.create_session()
 	zlm.append("verdict", "retry")
 	zlm.append("decision", {"mode": "fallback", "reason": "timeout"})
 	entries = zlm.get()
-	next_session = zlm.swap()
-	adopted_root = zlm.adopt("../user-workspace")
 
 with Zlm(max_sessions=10, max_entries=50) as zlm:
+	session_id = zlm.create_session()
 	zlm.append("verdict", "keep more history")
+
+with Zlm(session_id=session_id) as zlm:
+	entries = zlm.get()
 ```
 
-`Zlm` mirrors the CLI workflow:
+`Zlm` binds to a session id:
 
-- `append(type, body)`
+- `create_session()`
+- `append(type, body, session_id=None)`
 - `get(session_id=None)`
-- `swap()`
-- `adopt(path)`
+
+When a `Zlm` instance is constructed with `session_id=...`, or after `create_session()` is called on that instance, `append()` and `get()` can use the bound session implicitly. Passing `session_id=...` to `append()` or `get()` targets a specific session explicitly.
 
 `Zlm` also accepts optional `max_sessions` and `max_entries` constructor arguments to override the default retention window.
-
-`adopt(path)` sets `zlm_cwd_override` in the current Python process and returns the resolved workspace root.
 
 `SQLiteMemoryContext` remains the lower-level storage API.
 
@@ -164,4 +174,4 @@ context.close()
 ```
 
 By default the SQLite file is stored at `{temp}/zlm-memory.db`.
-Pass `db_path` to override it, for example in tests or for workspace-local storage. `SQLiteMemoryContext` also accepts `max_sessions` and `max_entries`.
+Pass `db_path` to override it, for example in tests or for project-local storage. `SQLiteMemoryContext` also accepts `max_sessions` and `max_entries`.

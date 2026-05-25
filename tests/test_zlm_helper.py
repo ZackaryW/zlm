@@ -1,89 +1,68 @@
-import os
 from pathlib import Path
 
 import pytest
 
 from zlm import Zlm
-from zlm.utils import CWD_OVERRIDE_ENV
 
 
-def test_helper_append_and_get_match_cli_style_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
-    monkeypatch.chdir(tmp_path)
-
+def test_helper_requires_explicit_session_before_append(tmp_path: Path) -> None:
     with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        with pytest.raises(ValueError, match="session_id is required"):
+            zlm.append("verdict", "hello")
+
+
+def test_helper_create_session_binds_session_for_append_and_get(tmp_path: Path) -> None:
+    with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        session_id = zlm.create_session()
         zlm.append("verdict", "hello")
 
+        assert session_id
         assert zlm.get() == [{"type": "verdict", "body": "hello"}]
 
 
-def test_helper_swap_creates_new_current_session(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
-    monkeypatch.chdir(tmp_path)
-
+def test_helper_can_target_existing_session_from_constructor(tmp_path: Path) -> None:
     with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        session_id = zlm.create_session()
         zlm.append("verdict", "before")
-        first_session = zlm.swap()
+
+    with Zlm(db_path=tmp_path / "memory.db", session_id=session_id) as zlm:
         zlm.append("verdict", "after")
 
-        assert zlm.get() == [{"type": "verdict", "body": "after"}]
-        assert zlm.get(first_session) == [{"type": "verdict", "body": "after"}]
+        assert zlm.get() == [
+            {"type": "verdict", "body": "before"},
+            {"type": "verdict", "body": "after"},
+        ]
 
 
-def test_helper_adopt_sets_env_override_to_git_root(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
-    repo_root = tmp_path / "repo"
-    nested_dir = repo_root / "pkg" / "feature"
-    nested_dir.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-
+def test_helper_create_session_switches_bound_session(tmp_path: Path) -> None:
     with Zlm(db_path=tmp_path / "memory.db") as zlm:
-        adopted_root = zlm.adopt(nested_dir)
+        first_session = zlm.create_session()
+        zlm.append("verdict", "before")
+        second_session = zlm.create_session()
+        zlm.append("verdict", "after")
 
-        assert adopted_root == repo_root.resolve()
-        assert zlm.workspace_root == repo_root.resolve()
-        assert zlm.workspace_hash == zlm.context._derive_workspace_hash(repo_root)
-        assert os.environ[CWD_OVERRIDE_ENV] == str(repo_root.resolve())
-
-
-def test_helper_adopt_allows_inheriting_memory_from_other_workspace_path(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
-    db_path = tmp_path / "memory.db"
-    repo_root = tmp_path / "repo"
-    source_dir = repo_root / "pkg" / "a"
-    adopted_dir = tmp_path / "agent-worktree"
-    source_dir.mkdir(parents=True)
-    adopted_dir.mkdir()
-    (repo_root / ".git").mkdir()
-
-    monkeypatch.chdir(source_dir)
-    with Zlm(db_path=db_path) as source_zlm:
-        source_zlm.append("verdict", "retry")
-
-    monkeypatch.chdir(adopted_dir)
-    with Zlm(db_path=db_path) as adopted_zlm:
-        adopted_zlm.adopt(source_dir)
-
-        assert adopted_zlm.get() == [{"type": "verdict", "body": "retry"}]
+        assert first_session != second_session
+        assert zlm.get(first_session) == [{"type": "verdict", "body": "before"}]
+        assert zlm.get() == [{"type": "verdict", "body": "after"}]
 
 
-def test_helper_allows_configuring_retention_limits(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv(CWD_OVERRIDE_ENV, raising=False)
-    monkeypatch.chdir(tmp_path)
+def test_helper_get_requires_explicit_or_bound_session(tmp_path: Path) -> None:
+    with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        with pytest.raises(ValueError, match="session_id is required"):
+            zlm.get()
 
+
+def test_helper_allows_configuring_retention_limits(tmp_path: Path) -> None:
     with Zlm(db_path=tmp_path / "memory.db", max_sessions=2, max_entries=2) as zlm:
-        first_session = zlm.swap()
+        first_session = zlm.create_session()
         zlm.append("verdict", "first")
 
-        second_session = zlm.swap()
+        second_session = zlm.create_session()
         zlm.append("verdict", "second")
         zlm.append("verdict", "second-overflow")
         zlm.append("verdict", "second-latest")
 
-        third_session = zlm.swap()
+        third_session = zlm.create_session()
         zlm.append("verdict", "third")
 
         with pytest.raises(ValueError, match="unknown session_id"):
@@ -94,4 +73,4 @@ def test_helper_allows_configuring_retention_limits(tmp_path: Path, monkeypatch)
             {"type": "verdict", "body": "second-latest"},
         ]
         assert zlm.get() == [{"type": "verdict", "body": "third"}]
-        assert zlm.context.list_sessions(zlm.workspace_hash) == [third_session, second_session]
+        assert zlm.context.list_sessions() == [third_session, second_session]

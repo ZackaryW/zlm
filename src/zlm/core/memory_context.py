@@ -8,9 +8,7 @@ from typing import Any
 from zlm.utils import (
     default_db_path,
     deserialize_entry,
-    derive_workspace_hash,
     now_ts,
-    resolve_workspace_root,
     serialize_entry,
     validate_entry,
 )
@@ -52,7 +50,6 @@ class SQLiteMemoryContext:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
-                    workspace_hash TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     last_seen_at INTEGER NOT NULL
                 )
@@ -63,7 +60,6 @@ class SQLiteMemoryContext:
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
-                    workspace_hash TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     payload BLOB NOT NULL
                 )
@@ -71,8 +67,8 @@ class SQLiteMemoryContext:
             )
             self._conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_sessions_workspace_last_seen
-                ON sessions(workspace_hash, last_seen_at DESC)
+                CREATE INDEX IF NOT EXISTS idx_sessions_last_seen
+                ON sessions(last_seen_at DESC, session_id DESC)
                 """
             )
             self._conn.execute(
@@ -81,21 +77,9 @@ class SQLiteMemoryContext:
                 ON memories(session_id, id DESC)
                 """
             )
-            self._conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_memories_workspace_session
-                ON memories(workspace_hash, session_id, id DESC)
-                """
-            )
 
     def _now_ts(self) -> int:
         return now_ts()
-
-    def _resolve_workspace_root(self, path: str | Path | None = None) -> Path:
-        return resolve_workspace_root(path)
-
-    def _derive_workspace_hash(self, path: str | Path | None = None) -> str:
-        return derive_workspace_hash(path)
 
     def _validate_entry(self, entry: object) -> dict[str, Any]:
         return validate_entry(entry)
@@ -106,15 +90,6 @@ class SQLiteMemoryContext:
             (session_id,),
         ).fetchone()
         return row is not None
-
-    def _session_workspace(self, session_id: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT workspace_hash FROM sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return str(row["workspace_hash"])
 
     def _prune_session_entries(self, session_id: str) -> None:
         self._conn.execute(
@@ -132,49 +107,46 @@ class SQLiteMemoryContext:
             (session_id, session_id, self._max_entries),
         )
 
-    def _find_evicted_sessions(self, workspace_hash: str) -> list[str]:
+    def _find_evicted_sessions(self) -> list[str]:
         rows = self._conn.execute(
             """
             SELECT session_id
             FROM sessions
-            WHERE workspace_hash = ?
             ORDER BY last_seen_at DESC, session_id DESC
             LIMIT -1 OFFSET ?
             """,
-            (workspace_hash, self._max_sessions),
+            (self._max_sessions,),
         ).fetchall()
         return [str(row["session_id"]) for row in rows]
 
-    def _delete_sessions_and_memories(self, workspace_hash: str, session_ids: list[str]) -> None:
+    def _delete_sessions_and_memories(self, session_ids: list[str]) -> None:
         if not session_ids:
             return
 
         placeholders = ", ".join("?" for _ in session_ids)
-        params = [workspace_hash, *session_ids]
         self._conn.execute(
-            f"DELETE FROM memories WHERE workspace_hash = ? AND session_id IN ({placeholders})",
-            params,
+            f"DELETE FROM memories WHERE session_id IN ({placeholders})",
+            session_ids,
         )
         self._conn.execute(
-            f"DELETE FROM sessions WHERE workspace_hash = ? AND session_id IN ({placeholders})",
-            params,
+            f"DELETE FROM sessions WHERE session_id IN ({placeholders})",
+            session_ids,
         )
 
-    def create_session(self, workspace_hash: str | None = None) -> str:
-        resolved_workspace = workspace_hash or self._derive_workspace_hash()
+    def create_session(self) -> str:
         session_id = str(uuid.uuid4())
         created_at = self._now_ts()
 
         with self._conn:
             self._conn.execute(
                 """
-                INSERT INTO sessions(session_id, workspace_hash, created_at, last_seen_at)
-                VALUES(?, ?, ?, ?)
+                INSERT INTO sessions(session_id, created_at, last_seen_at)
+                VALUES(?, ?, ?)
                 """,
-                (session_id, resolved_workspace, created_at, created_at),
+                (session_id, created_at, created_at),
             )
-            evicted_sessions = self._find_evicted_sessions(resolved_workspace)
-            self._delete_sessions_and_memories(resolved_workspace, evicted_sessions)
+            evicted_sessions = self._find_evicted_sessions()
+            self._delete_sessions_and_memories(evicted_sessions)
 
         return session_id
 
@@ -182,16 +154,9 @@ class SQLiteMemoryContext:
         self,
         session_id: str,
         entry: dict,
-        workspace_hash: str | None = None,
     ) -> None:
-        resolved_workspace = workspace_hash or self._derive_workspace_hash()
-        session_workspace = self._session_workspace(session_id)
-
-        if session_workspace is None:
+        if not self._session_exists(session_id):
             raise ValueError(f"unknown session_id: {session_id}")
-
-        if session_workspace != resolved_workspace:
-            raise ValueError("session does not belong to workspace")
 
         payload = serialize_entry(entry)
         updated_at = self._now_ts()
@@ -203,28 +168,21 @@ class SQLiteMemoryContext:
             )
             self._conn.execute(
                 """
-                INSERT INTO memories(session_id, workspace_hash, created_at, payload)
-                VALUES(?, ?, ?, ?)
+                INSERT INTO memories(session_id, created_at, payload)
+                VALUES(?, ?, ?)
                 """,
-                (session_id, resolved_workspace, updated_at, payload),
+                (session_id, updated_at, payload),
             )
             self._prune_session_entries(session_id)
-            evicted_sessions = self._find_evicted_sessions(resolved_workspace)
-            self._delete_sessions_and_memories(resolved_workspace, evicted_sessions)
+            evicted_sessions = self._find_evicted_sessions()
+            self._delete_sessions_and_memories(evicted_sessions)
 
     def get_session_memory(
         self,
         session_id: str,
-        workspace_hash: str | None = None,
     ) -> list[dict[str, Any]]:
-        resolved_workspace = workspace_hash or self._derive_workspace_hash()
-        session_workspace = self._session_workspace(session_id)
-
-        if session_workspace is None:
+        if not self._session_exists(session_id):
             raise ValueError(f"unknown session_id: {session_id}")
-
-        if session_workspace != resolved_workspace:
-            raise ValueError("session does not belong to workspace")
 
         rows = self._conn.execute(
             """
@@ -238,22 +196,20 @@ class SQLiteMemoryContext:
         ).fetchall()
         return [deserialize_entry(row["payload"]) for row in reversed(rows)]
 
-    def list_sessions(self, workspace_hash: str | None = None) -> list[str]:
-        resolved_workspace = workspace_hash or self._derive_workspace_hash()
+    def list_sessions(self) -> list[str]:
         rows = self._conn.execute(
             """
             SELECT session_id
             FROM sessions
-            WHERE workspace_hash = ?
             ORDER BY last_seen_at DESC, session_id DESC
             LIMIT ?
             """,
-            (resolved_workspace, self._max_sessions),
+            (self._max_sessions,),
         ).fetchall()
         return [str(row["session_id"]) for row in rows]
 
-    def latest_session(self, workspace_hash: str | None = None) -> str | None:
-        sessions = self.list_sessions(workspace_hash=workspace_hash)
+    def latest_session(self) -> str | None:
+        sessions = self.list_sessions()
         if not sessions:
             return None
         return sessions[0]
