@@ -42,10 +42,17 @@ def _load_json(value: str) -> Any:
 		return _unwrap_reserved_literal({_RESERVED_LITERAL_KEY: value})
 
 
-def _with_zlm(db_path: str | None, workspace_hash: str | None) -> Zlm:
+def _with_zlm(
+	db_path: str | None,
+	workspace_hash: str | None,
+	max_sessions: int,
+	max_entries: int,
+) -> Zlm:
 	return Zlm(
 		db_path=Path(db_path) if db_path is not None else None,
 		workspace_hash=workspace_hash,
+		max_sessions=max_sessions,
+		max_entries=max_entries,
 	)
 
 
@@ -56,11 +63,35 @@ def _quote_powershell_string(value: str) -> str:
 @click.group()
 @click.option("--db-path", type=click.Path(path_type=str), default=None, help="Path to the SQLite database file.")
 @click.option("--workspace-hash", default=None, help="Override the derived workspace hash.")
+@click.option(
+	"--max-sessions",
+	type=click.IntRange(min=1),
+	default=5,
+	show_default=True,
+	envvar="ZLM_MAX_SESSIONS",
+	help="Maximum retained sessions per workspace.",
+)
+@click.option(
+	"--max-entries",
+	type=click.IntRange(min=1),
+	default=15,
+	show_default=True,
+	envvar="ZLM_MAX_ENTRIES",
+	help="Maximum retained entries per session.",
+)
 @click.pass_context
-def cli(ctx: click.Context, db_path: str | None, workspace_hash: str | None) -> None:
+def cli(
+	ctx: click.Context,
+	db_path: str | None,
+	workspace_hash: str | None,
+	max_sessions: int,
+	max_entries: int,
+) -> None:
 	ctx.ensure_object(dict)
 	ctx.obj["db_path"] = db_path
 	ctx.obj["workspace_hash"] = workspace_hash
+	ctx.obj["max_sessions"] = max_sessions
+	ctx.obj["max_entries"] = max_entries
 
 
 @cli.command(
@@ -75,7 +106,12 @@ def cli(ctx: click.Context, db_path: str | None, workspace_hash: str | None) -> 
 @click.pass_context
 def append_entry(ctx: click.Context, entry_type: str, body_json: str) -> None:
 	try:
-		with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+		with _with_zlm(
+			ctx.obj["db_path"],
+			ctx.obj["workspace_hash"],
+			ctx.obj["max_sessions"],
+			ctx.obj["max_entries"],
+		) as zlm:
 			zlm.append(entry_type, _load_json(body_json))
 	except ValueError as exc:
 		raise click.ClickException(str(exc)) from exc
@@ -97,7 +133,12 @@ def adopt_workspace(path: Path) -> None:
 @cli.command("swap", help="Create and switch to a new current workspace session.")
 @click.pass_context
 def swap_session(ctx: click.Context) -> None:
-	with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+	with _with_zlm(
+		ctx.obj["db_path"],
+		ctx.obj["workspace_hash"],
+		ctx.obj["max_sessions"],
+		ctx.obj["max_entries"],
+	) as zlm:
 		session_id = zlm.swap()
 
 	click.echo(session_id)
@@ -108,7 +149,12 @@ def swap_session(ctx: click.Context) -> None:
 @click.pass_context
 def get_session_memory(ctx: click.Context, session_id: str | None) -> None:
 	try:
-		with _with_zlm(ctx.obj["db_path"], ctx.obj["workspace_hash"]) as zlm:
+		with _with_zlm(
+			ctx.obj["db_path"],
+			ctx.obj["workspace_hash"],
+			ctx.obj["max_sessions"],
+			ctx.obj["max_entries"],
+		) as zlm:
 			entries = zlm.get(session_id=session_id)
 	except ValueError as exc:
 		raise click.ClickException(str(exc)) from exc

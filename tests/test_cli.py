@@ -293,3 +293,192 @@ def test_cli_get_session_memory_without_session_reports_missing_workspace_sessio
 
     assert result.exit_code != 0
     assert "no session found for current workspace" in result.output
+
+
+def test_cli_allows_configuring_retention_limits(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "memory.db"
+    monkeypatch.chdir(tmp_path)
+
+    first_swap = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "--max-sessions", "2", "--max-entries", "2", "swap"],
+    )
+    first_session = first_swap.output.strip()
+    first_append = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "append",
+            "verdict",
+            '"first"',
+        ],
+    )
+
+    second_swap = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "--max-sessions", "2", "--max-entries", "2", "swap"],
+    )
+    second_session = second_swap.output.strip()
+    second_append = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "append",
+            "verdict",
+            '"second"',
+        ],
+    )
+    second_overflow = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "append",
+            "verdict",
+            '"second-overflow"',
+        ],
+    )
+    second_latest = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "append",
+            "verdict",
+            '"second-latest"',
+        ],
+    )
+
+    third_swap = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "--max-sessions", "2", "--max-entries", "2", "swap"],
+    )
+    third_session = third_swap.output.strip()
+    third_append = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "append",
+            "verdict",
+            '"third"',
+        ],
+    )
+
+    evicted_result = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "get",
+            first_session,
+        ],
+    )
+    second_result = runner.invoke(
+        main,
+        [
+            "--db-path",
+            str(db_path),
+            "--max-sessions",
+            "2",
+            "--max-entries",
+            "2",
+            "get",
+            second_session,
+        ],
+    )
+    current_result = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "--max-sessions", "2", "--max-entries", "2", "get"],
+    )
+
+    assert first_swap.exit_code == 0
+    assert first_append.exit_code == 0
+    assert second_swap.exit_code == 0
+    assert second_append.exit_code == 0
+    assert second_overflow.exit_code == 0
+    assert second_latest.exit_code == 0
+    assert third_swap.exit_code == 0
+    assert third_append.exit_code == 0
+    assert third_session
+    assert evicted_result.exit_code != 0
+    assert "unknown session_id" in evicted_result.output
+    assert orjson.loads(second_result.output) == [
+        {"type": "verdict", "body": "second-overflow"},
+        {"type": "verdict", "body": "second-latest"},
+    ]
+    assert orjson.loads(current_result.output) == [{"type": "verdict", "body": "third"}]
+
+
+def test_cli_allows_configuring_retention_limits_via_environment(tmp_path, monkeypatch) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "memory.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZLM_MAX_SESSIONS", "2")
+    monkeypatch.setenv("ZLM_MAX_ENTRIES", "2")
+
+    first_swap = runner.invoke(main, ["--db-path", str(db_path), "swap"])
+    first_session = first_swap.output.strip()
+    first_append = runner.invoke(main, ["--db-path", str(db_path), "append", "verdict", '"first"'])
+
+    second_swap = runner.invoke(main, ["--db-path", str(db_path), "swap"])
+    second_session = second_swap.output.strip()
+    second_append = runner.invoke(main, ["--db-path", str(db_path), "append", "verdict", '"second"'])
+    second_overflow = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "append", "verdict", '"second-overflow"'],
+    )
+    second_latest = runner.invoke(
+        main,
+        ["--db-path", str(db_path), "append", "verdict", '"second-latest"'],
+    )
+
+    third_swap = runner.invoke(main, ["--db-path", str(db_path), "swap"])
+    third_append = runner.invoke(main, ["--db-path", str(db_path), "append", "verdict", '"third"'])
+
+    evicted_result = runner.invoke(main, ["--db-path", str(db_path), "get", first_session])
+    second_result = runner.invoke(main, ["--db-path", str(db_path), "get", second_session])
+    current_result = runner.invoke(main, ["--db-path", str(db_path), "get"])
+
+    assert first_swap.exit_code == 0
+    assert first_append.exit_code == 0
+    assert second_swap.exit_code == 0
+    assert second_append.exit_code == 0
+    assert second_overflow.exit_code == 0
+    assert second_latest.exit_code == 0
+    assert third_swap.exit_code == 0
+    assert third_append.exit_code == 0
+    assert evicted_result.exit_code != 0
+    assert "unknown session_id" in evicted_result.output
+    assert orjson.loads(second_result.output) == [
+        {"type": "verdict", "body": "second-overflow"},
+        {"type": "verdict", "body": "second-latest"},
+    ]
+    assert orjson.loads(current_result.output) == [{"type": "verdict", "body": "third"}]

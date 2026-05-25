@@ -28,6 +28,15 @@ uv run zlm append verdict 'hello'
 uv run zlm get
 ```
 
+Retention can also be overridden from the CLI when you need a larger or smaller window:
+
+```powershell
+uv run zlm --max-sessions 10 --max-entries 50 append verdict 'hello'
+uv run zlm --max-sessions 10 --max-entries 50 get
+```
+
+You can also set `ZLM_MAX_SESSIONS` and `ZLM_MAX_ENTRIES` in the shell to avoid repeating the flags.
+
 Example output:
 
 ```json
@@ -65,6 +74,13 @@ uv run zlm append score '{"$zlmk": 0.91}'
 
 - Returns the retained entries for the current workspace session.
 - If `SESSION_ID` is omitted, `zlm` resolves the latest session for the current workspace.
+
+Global options:
+
+- `--db-path PATH`
+- `--workspace-hash HASH`
+- `--max-sessions N`
+- `--max-entries N`
 
 `swap`
 
