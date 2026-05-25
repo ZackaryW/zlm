@@ -44,6 +44,13 @@ uv run zlm append verdict 'hello'
 uv run zlm get
 ```
 
+If you already have a session id and want the current shell to lock onto it again, use `adopt`:
+
+```powershell
+uv run zlm adopt $session
+$env:ZLM_SESSION_ID = '...'
+```
+
 Retention can also be overridden from the CLI when you need a larger or smaller window:
 
 ```powershell
@@ -95,6 +102,11 @@ uv run zlm append $session flag true
 uv run zlm append $session decision '{"mode":"fallback","reason":"timeout"}'
 uv run zlm append $session score '{"$zlmk": 0.91}'
 ```
+
+`adopt SESSION_ID`
+
+- Validates that the session exists.
+- Emits a PowerShell command that sets `ZLM_SESSION_ID` in the current shell.
 
 `get SESSION_ID`
 
@@ -154,6 +166,7 @@ with Zlm(session_id=session_id) as zlm:
 `Zlm` binds to a session id:
 
 - `create_session()`
+- `adopt(session_id)`
 - `append(type, body, session_id=None)`
 - `get(session_id=None)`
 

@@ -10,10 +10,10 @@ def test_cli_help_displays_commands() -> None:
     result = runner.invoke(main, ["--help"])
 
     assert result.exit_code == 0
+    assert "adopt" in result.output
     assert "append" in result.output
     assert "create-session" in result.output
     assert "get" in result.output
-    assert "adopt" not in result.output
     assert "swap" not in result.output
 
 
@@ -48,6 +48,27 @@ def test_cli_create_session_can_emit_powershell_env_assignment(tmp_path) -> None
     assert result.exit_code == 0
     assert result.output.startswith("$env:ZLM_SESSION_ID = '")
     assert result.output.strip().endswith("'")
+
+
+def test_cli_adopt_emits_powershell_env_assignment_for_existing_session(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "memory.db"
+    session_id = runner.invoke(main, ["--db-path", str(db_path), "create-session"]).output.strip()
+
+    result = runner.invoke(main, ["--db-path", str(db_path), "adopt", session_id])
+
+    assert result.exit_code == 0
+    assert result.output == f"$env:ZLM_SESSION_ID = '{session_id}'\n"
+
+
+def test_cli_adopt_reports_unknown_session(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "memory.db"
+
+    result = runner.invoke(main, ["--db-path", str(db_path), "adopt", "missing-session"])
+
+    assert result.exit_code != 0
+    assert "unknown session_id" in result.output
 
 
 def test_cli_append_and_get_require_explicit_session_id(tmp_path) -> None:

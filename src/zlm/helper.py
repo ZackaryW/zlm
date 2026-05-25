@@ -54,6 +54,12 @@ class Zlm:
         self._session_id = session_id
         return session_id
 
+    def adopt(self, session_id: str) -> str:
+        resolved_session_id = require_session_id(session_id)
+        self._context.get_session_memory(resolved_session_id)
+        self._session_id = resolved_session_id
+        return resolved_session_id
+
     def close(self) -> None:
         self._context.close()
 

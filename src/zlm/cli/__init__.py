@@ -163,6 +163,24 @@ def create_session(ctx: click.Context, export_session: bool) -> None:
 	click.echo(session_id)
 
 
+@cli.command("adopt", help="Validate SESSION_ID and emit a PowerShell command that sets ZLM_SESSION_ID.")
+@click.argument("session_id")
+@click.pass_context
+def adopt_session(ctx: click.Context, session_id: str) -> None:
+	try:
+		with _with_zlm(
+			ctx.obj["db_path"],
+			ctx.obj["max_sessions"],
+			ctx.obj["max_entries"],
+		) as zlm:
+			resolved_session_id = zlm.adopt(session_id)
+	except ValueError as exc:
+		raise click.ClickException(str(exc)) from exc
+
+	quoted_session_id = _quote_powershell_string(resolved_session_id)
+	click.echo(f"$env:{_SESSION_ENV_VAR} = '{quoted_session_id}'")
+
+
 @cli.command("get", help="Get retained memory for a session. Pass SESSION_ID explicitly or set ZLM_SESSION_ID.")
 @click.argument("session_id", required=False)
 @click.pass_context

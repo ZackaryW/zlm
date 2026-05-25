@@ -46,6 +46,29 @@ def test_helper_create_session_switches_bound_session(tmp_path: Path) -> None:
         assert zlm.get() == [{"type": "verdict", "body": "after"}]
 
 
+def test_helper_adopt_binds_existing_session(tmp_path: Path) -> None:
+    with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        session_id = zlm.create_session()
+        zlm.append("verdict", "before")
+
+    with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        adopted_session_id = zlm.adopt(session_id)
+        zlm.append("verdict", "after")
+
+        assert adopted_session_id == session_id
+        assert zlm.session_id == session_id
+        assert zlm.get() == [
+            {"type": "verdict", "body": "before"},
+            {"type": "verdict", "body": "after"},
+        ]
+
+
+def test_helper_adopt_rejects_unknown_session(tmp_path: Path) -> None:
+    with Zlm(db_path=tmp_path / "memory.db") as zlm:
+        with pytest.raises(ValueError, match="unknown session_id"):
+            zlm.adopt("missing-session")
+
+
 def test_helper_get_requires_explicit_or_bound_session(tmp_path: Path) -> None:
     with Zlm(db_path=tmp_path / "memory.db") as zlm:
         with pytest.raises(ValueError, match="session_id is required"):
